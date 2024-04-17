@@ -1,0 +1,113 @@
+#include <EEPROM.h>
+#include <SPI.h>                 // Dahili SPI kütüphanesi
+#include <MFRC522.h>             // v1.4.9
+#define reset 9                  // Reset pini
+#define ss 10                    // SS pin
+MFRC522 kartOkuyucu(ss, reset);  // Kart okuyucu isimli nesne oluşturuldu.
+byte i,
+  j, k;           /* j değişkeni kayıtlı kartların dört byte›lık ID›sinin ilk byte numarasını tutmaktadır. */
+byte kartSayisi;  //EEPROM hafızanın 0. baytında tutulacak.
+void setup() {
+  Serial.begin(9600);            //Bilgisayarın seri ekranıyla UART iletişimi.
+  SPI.begin();                   // MFRC522 kart okuyucusuyla SPI iletişimi.
+  kartOkuyucu.PCD_Init();        // MFRC522’yi başlat.
+  kartSayisi = EEPROM.read(0);   // Cihaz yeniden başladığında kart sayısını EEPROM’dan al.
+  if (!yoneticiKartKontrol()) {  // Yönetici kartı sisteme tanımlı değilse...
+    Serial.println("Lütfen yönetici olacak kartı okutunuz.");
+    kartOku();
+    for (i = 0; i < 4; i++) {
+      EEPROM.write(1 + i, kartOkuyucu.uid.uidByte[i]);
+    }  // Yönetici kart ID’si EEPROM hafızanın 1. - 4. baytlarında tutulacak (İlk 5 bayt doldu.).
+    Serial.println("Yönetici kartı hafızaya kaydedildi.");
+  }
+}
+void loop() {
+  kartOku();
+  if (kartKontrol()) {  // Kart geçerliyse yapılacaklar...
+    Serial.println("Kart geçerli.");
+  } else {  // Kart geçerli değilse yapılacaklar...
+    for (i = 0; i < 4; i++) {
+      Serial.print(kartOkuyucu.uid.uidByte[i], HEX);  //Geçersiz kartın ID’sini ekrana yazdır.
+      Serial.print(" ");
+    }
+    Serial.println(" numaralı kartınız sisteme tanımlı değil !");
+  }
+  delay(500);
+  Serial.println("\n Lütfen kartı okutunuz.");
+}
+void kartOku() {
+  Serial.println("Lütfen kartı okutunuz.");
+  if (!kartOkuyucu.PICC_IsNewCardPresent())  //Bir kart okunana kadar bekle.
+    return;
+  if (!kartOkuyucu.PICC_ReadCardSerial())  // Kartı oku.
+    return;
+}
+boolean kartKontrol() {       // Kart geçerliye 1, değilse 0 döndürür.
+  if (yoneticiKartKontrol())  // Yönetici kartı okutulmuşsa...
+    yonetimIslemleri();       // Kart ekleme ve silme işlemlerine geç.
+  else {                      // Yönetici kartı değilse kart kontrol işlemi yap.
+    k = 0;
+    for (j = 5; j < EEPROM.length() / 4; j = +4) {
+      /* Kayıtlı tüm kartlara bak. UNO hafızasına 1024/4=256 kart tanımlanabilir.
+       j değişkeni kayıtlı kartların dört byte›lık ID›sinin ilk byte numarasını tutmaktadır.*/
+      for (i = 0; i < 4; i++) {                                  // Her kartın ID’si dört byte.
+        if (EEPROM.read(j + i) == kartOkuyucu.uid.uidByte[i]) {  //Okunan kartı kayıtlı olanlarla karşılaştır. (5. byte’tan sonra)
+          k++;
+          if (k == 4) {  // Tüm byte’lar doğrulandıysa...
+            return 1;    // 1 döndür.
+          }
+        }
+      }
+    }
+    return 0;  // Okunan kart kayıtlı kartlarla eşleşmediyse 0 döndür.
+  }
+}
+boolean yoneticiKartKontrol() {  // Yönetici kartıysa 1, değilse 0 döndürür.
+  k = 0;
+  for (i = 1; i < 5; i++) {                              /* 1. - 4. baytları kontrol et. (0. byteta kart sayısı tutulmaktadır.) */
+    if (EEPROM.read(i) == kartOkuyucu.uid.uidByte[i]) {  //Okunan kart yönetici kartı ise...
+      k++;
+      if (k == 4) {  // Yönetici kartının tüm byteları doğrulandıysa...
+        return 1;    // 1 döndür.
+      }
+    }
+  }
+  return 0;  // Okunan kart yönetici kartı değilse 0 döndür.
+}
+void yonetimIslemleri() {
+  Serial.println("Lütfen eklemek veya silmek istediğiniz kartı okutunuz.");
+  kartOku();
+  if (kartKontrol)  //Kart kayıtlıysa...
+    kartSil();      // Kartı sil.
+  else              //Kart kayıtlı değilse...
+    kartEkle();     //Kartı ekle.
+}
+void kartSil() {
+  for (i = j; i < EEPROM.length() - j - 1; i++)
+    EEPROM.write(i, EEPROM.read(i + 4)); /*Bulunan kart ID’sinin ilk byte numarasından (j) başlaşyarak tüm hafızayı dört byte sola kaydır.*/
+  Serial.println("Okutulan kart hafızadan silindi.");
+}
+void kartEkle() {
+  for (i = 0; i < 4; i++)
+    EEPROM.write(kartSayisi * 4 + 1 + i, kartOkuyucu.uid.uidByte[i]); /* Yeni kartı sıradaki 
+dört bytea yaz. */
+  Serial.println("Yeni kart hafızaya kaydedildi.");
+}
+void stepMotor() {  // Step motor Yaklaşık 90° döner.
+  int x, adimSayisi = 500, sure = 2;
+  for (x = 0; x < adimSayisi / 4; x++) {
+    for (byte i = 6; i <= 9; i++) {  //Sağa dön.
+      digitalWrite(i, 1);
+      delay(sure);
+      digitalWrite(i, 0);
+    }
+  }
+  delay(1000);  // Kapı açık kalma süresi.
+  for (x = 0; x < adimSayisi / 4; x++) {
+    for (byte i = 9; i >= 6; i--) {  //Sola dön.
+      digitalWrite(i, 1);
+      delay(sure);
+      digitalWrite(i, 0);
+    }
+  }
+}
